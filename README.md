@@ -95,6 +95,19 @@ sockets. `tests/test_auth_protocol.py` is a protocol-level test that spawns
 a real `wettyd` process and drives the WS wire protocol directly, checking
 the actual bytes sent, not just the underlying decision logic.
 
+The frontend has its own tests, run separately:
+
+```sh
+cd frontend && npm test
+```
+
+`src/client/wetty/outputDecoder.test.ts` covers `outputDecoder.ts`, which
+reassembles PTY output that arrives with a multi-byte UTF-8 character split
+across two WebSocket messages. wettyd's C backend forwards PTY output in
+raw OS read() chunks with no regard for character boundaries, so this can
+and does happen, decoding each message in isolation instead corrupts the
+split character into replacement glyphs.
+
 ## Running
 
 Same CLI as ttyd (see `./build/wettyd --help`), **ttyd is read-only by

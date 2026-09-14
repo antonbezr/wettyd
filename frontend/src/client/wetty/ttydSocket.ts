@@ -7,6 +7,8 @@
  * needed no structural changes.
  */
 
+import { OutputDecoder } from './outputDecoder';
+
 // Byte-code protocol shared by client and server (ttyd/src/server.h)
 const enum ServerCmd {
   Output = '0',
@@ -42,7 +44,13 @@ export class TtydSocket implements SocketLike {
 
   private readonly encoder = new TextEncoder();
 
+  // Used only for one-off, always-complete-in-one-message metadata (window
+  // title, preferences), decoded without streaming mode.
   private readonly decoder = new TextDecoder();
+
+  // Decodes the continuous PTY output byte stream, see outputDecoder.ts for
+  // why this needs to be separate from the metadata decoder above.
+  private readonly outputDecoder = new OutputDecoder();
 
   private token = '';
 
@@ -111,7 +119,7 @@ export class TtydSocket implements SocketLike {
 
     switch (cmd) {
       case ServerCmd.Output:
-        this.fire('data', this.decoder.decode(data));
+        this.fire('data', this.outputDecoder.decode(data));
         break;
       case ServerCmd.SetWindowTitle:
         document.title = this.decoder.decode(data);
