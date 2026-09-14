@@ -23,7 +23,7 @@ function onResize(term: Term): () => void {
 }
 
 // ttyd's own protocol constants for flow control (see ttyd/html/src/components/app.tsx):
-// batch writes in chunks of roughly `limit` characters before deciding whether
+// batch writes in chunks of roughly FLOW_LIMIT characters before deciding whether
 // the terminal is falling behind (tracked via xterm's write() callback).
 const FLOW_LIMIT = 100000;
 const FLOW_HIGH_WATER = 10;

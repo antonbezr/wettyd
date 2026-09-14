@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm';
 
 import { terminal as termElement } from './disconnect/elements';
 import { configureTerm } from './term/configuration';
+import { installOsc52Clipboard } from './term/configuration/osc52';
 import { loadOptions } from './term/load';
 import { setTitle } from './title';
 import type { Options } from './term/options';
@@ -28,6 +29,7 @@ export class Term extends Terminal {
     this.loadAddon(this.fitAddon);
     this.loadAddon(new WebLinksAddon());
     this.loadAddon(new ImageAddon());
+    installOsc52Clipboard(this);
     this.loadOptions = loadOptions;
     if (!isMobile) {
       try {

@@ -140,8 +140,8 @@ else()
     message(WARNING "Python 3 not found, skipping auth_protocol_integration test registration")
 endif()
 
-# Run the test suite as part of a plain build, not just `ctest` on demand,
-# so a broken auth check fails the build instead of quietly shipping.
+# Run the test suite as part of a plain build, not just ctest on demand,
+# so a failing test fails the build instead of quietly shipping.
 add_custom_target(
     check ALL
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
