@@ -95,8 +95,3 @@ default**, pass `-W`/`--writable` or nothing you type will reach the shell:
 ```
 
 Then open `http://localhost:7681/`.
-
-## License
-
-MIT, combining ttyd and wetty, see [LICENSE](./LICENSE) for both original
-copyright notices.
