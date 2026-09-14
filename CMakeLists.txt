@@ -33,7 +33,7 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c)
+set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c src/homedir.c)
 
 include(FindPackageHandleStandardArgs)
 
@@ -122,10 +122,21 @@ install(FILES man/wettyd.1 DESTINATION "${CMAKE_INSTALL_MANDIR}/man1" COMPONENT 
 
 enable_testing()
 
-# Pure-C unit tests for src/auth.c, no libwebsockets or network needed.
-add_executable(auth_test tests/test_auth.c src/auth.c)
-target_include_directories(auth_test PRIVATE src)
-add_test(NAME auth_unit_tests COMMAND auth_test)
+set(WETTYD_UNIT_TEST_TARGETS "")
+
+# Registers a pure-C unit test for src/<name>.c, no libwebsockets or network
+# needed: compiles tests/test_<name>.c together with src/<name>.c into its
+# own binary and adds it to ctest. Add a new one with a single line, e.g.
+# add_c_unit_test(homedir) for tests/test_homedir.c + src/homedir.c.
+function(add_c_unit_test name)
+    add_executable(${name}_test tests/test_${name}.c src/${name}.c)
+    target_include_directories(${name}_test PRIVATE src)
+    add_test(NAME ${name}_unit_tests COMMAND ${name}_test)
+    set(WETTYD_UNIT_TEST_TARGETS ${WETTYD_UNIT_TEST_TARGETS} ${name}_test PARENT_SCOPE)
+endfunction()
+
+add_c_unit_test(auth)
+add_c_unit_test(homedir)
 
 # Protocol-level integration test, drives the real WS wire protocol against
 # a live wettyd process.
@@ -145,6 +156,6 @@ endif()
 add_custom_target(
     check ALL
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS ${PROJECT_NAME} auth_test
+    DEPENDS ${PROJECT_NAME} ${WETTYD_UNIT_TEST_TARGETS}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
