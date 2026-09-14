@@ -36,8 +36,8 @@ function assembleXtermConfigSrcdoc() {
 }
 
 function faviconDataUri() {
-  const bytes = readFileSync(`${root}/src/assets/favicon.ico`);
-  return `data:image/x-icon;base64,${bytes.toString('base64')}`;
+  const bytes = readFileSync(`${root}/src/assets/favicon.png`);
+  return `data:image/png;base64,${bytes.toString('base64')}`;
 }
 
 async function buildClient() {

@@ -1,5 +1,7 @@
 # wettyd
 
+<img src="./wettyd.png" alt="wettyd logo" width="120" />
+
 wetty's browser frontend, running on ttyd's C/libwebsockets backend.
 
 ## Why
