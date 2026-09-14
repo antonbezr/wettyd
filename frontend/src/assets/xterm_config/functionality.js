@@ -172,7 +172,7 @@ function closeConfig() {
   window.parent.postMessage({ type: 'wetty:close' }, '*');
 }
 
-window.addEventListener('input', () => {
+document.addEventListener('DOMContentLoaded', () => {
   const els = document.querySelectorAll('input, select');
   for (let i = 0; i < els.length; i += 1) {
     els[i].addEventListener('input', saveConfig);
