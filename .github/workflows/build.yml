@@ -1,0 +1,66 @@
+name: build
+
+# Builds the whole project end to end on every push and pull request: the
+# frontend job regenerates src/html.h from scratch (see frontend/build.js),
+# then the backend job builds the C binary against that freshly generated
+# file rather than the one already committed, so a broken frontend build
+# can't hide behind a stale, still-working html.h. Modeled on ttyd's own
+# split frontend/backend workflows and wetty's Node build-and-test job,
+# simplified down to what's needed to catch a broken build, no release,
+# no publishing, no cross-compile matrix.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Type check
+        run: npx tsc --noEmit -p tsconfig.json
+        working-directory: frontend
+
+      - name: Build frontend, generate src/html.h
+        run: npm run build
+        working-directory: frontend
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: html.h
+          path: src/html.h
+
+  backend:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: html.h
+          path: src
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential libwebsockets-dev libuv1-dev libjson-c-dev zlib1g-dev libssl-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build and run tests
+        run: cmake --build build -j"$(nproc)"
