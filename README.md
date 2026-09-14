@@ -83,6 +83,18 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j4
 ```
 
+The build runs the test suite automatically as part of that last step, and
+fails if any test fails. To run it again on demand without rebuilding:
+
+```sh
+cd build && ctest --output-on-failure
+```
+
+`tests/test_auth.c` is pure C unit tests for `src/auth.c`, no server, no
+sockets. `tests/test_auth_protocol.py` is a protocol-level test that spawns
+a real `wettyd` process and drives the WS wire protocol directly, checking
+the actual bytes sent, not just the underlying decision logic.
+
 ## Running
 
 Same CLI as ttyd (see `./build/wettyd --help`), **ttyd is read-only by

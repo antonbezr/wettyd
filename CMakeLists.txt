@@ -33,7 +33,7 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c)
+set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c)
 
 include(FindPackageHandleStandardArgs)
 
@@ -119,3 +119,32 @@ include(GNUInstallDirs)
 
 install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT prog)
 install(FILES man/wettyd.1 DESTINATION "${CMAKE_INSTALL_MANDIR}/man1" COMPONENT doc)
+
+enable_testing()
+
+# Pure-C unit tests for src/auth.c, no libwebsockets or network needed.
+add_executable(auth_test tests/test_auth.c src/auth.c)
+target_include_directories(auth_test PRIVATE src)
+add_test(NAME auth_unit_tests COMMAND auth_test)
+
+# Protocol-level integration test, drives the real WS wire protocol against
+# a live wettyd process.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME auth_protocol_integration
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_auth_protocol.py $<TARGET_FILE:${PROJECT_NAME}>
+    )
+    set_tests_properties(auth_protocol_integration PROPERTIES TIMEOUT 30)
+else()
+    message(WARNING "Python 3 not found, skipping auth_protocol_integration test registration")
+endif()
+
+# Run the test suite as part of a plain build, not just `ctest` on demand,
+# so a broken auth check fails the build instead of quietly shipping.
+add_custom_target(
+    check ALL
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS ${PROJECT_NAME} auth_test
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)

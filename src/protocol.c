@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "auth.h"
 #include "pty.h"
 #include "server.h"
 #include "utils.h"
@@ -213,8 +214,6 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         lwsl_warn("refuse to serve WS client due to the --max-clients option.\n");
         return 1;
       }
-      if (!check_auth(wsi, pss)) return 1;
-
       n = lws_hdr_copy(wsi, pss->path, sizeof(pss->path), WSI_TOKEN_GET_URI);
 #if defined(LWS_ROLE_H2)
       if (n <= 0) n = lws_hdr_copy(wsi, pss->path, sizeof(pss->path), WSI_TOKEN_HTTP_COLON_PATH);
@@ -222,6 +221,16 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (strncmp(pss->path, endpoints.ws, n) != 0) {
         lwsl_warn("refuse to serve WS client for illegal ws path: %s\n", pss->path);
         return 1;
+      }
+
+      // Some WebSocket client implementations, Safari included, cannot attach a
+      // Basic Auth header to the upgrade request itself, see
+      // https://github.com/tsl0922/ttyd/issues/1437. When credential auth is
+      // configured, defer enforcement to the AuthToken sent in the client's
+      // first WS message instead, see auth_should_defer_initial_messages below
+      // and auth_token_matches further down.
+      if (auth_ws_upgrade_requires_basic_auth(server->credential, server->auth_header)) {
+        if (!check_auth(wsi, pss)) return 1;
       }
 
       if (server->check_origin && !check_host_origin(wsi)) {
@@ -256,6 +265,14 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
       if (!pss->initialized) {
+        // Withhold the window-title and preferences messages from a client
+        // that hasn't authenticated yet, so completing the WS handshake alone
+        // doesn't leak the hostname and running command. spawn_process() calls
+        // lws_callback_on_writable() once the client authenticates, so this
+        // just defers sending them, it doesn't drop them.
+        if (auth_should_defer_initial_messages(server->credential, server->auth_header, pss->authenticated)) {
+          break;
+        }
         if (pss->initial_cmd_index == sizeof(initial_cmds)) {
           pss->initialized = true;
           pty_resume(pss->process);
@@ -338,7 +355,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             struct json_object *o = NULL;
             if (json_object_object_get_ex(obj, "AuthToken", &o)) {
               const char *token = json_object_get_string(o);
-              if (token != NULL && !strcmp(token, server->credential))
+              if (auth_token_matches(token, server->credential))
                 pss->authenticated = true;
               else
                 lwsl_warn("WS authentication failed with token: %s\n", token);
