@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node build.js",
     "test": "node test.js",
-    "clean": "rm -rf build .test-build ../src/html.h"
+    "clean": "rm -rf build .test-build ../src/html.h ../src/login_html.h"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.3.1",

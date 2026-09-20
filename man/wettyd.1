@@ -29,7 +29,7 @@ SSL support based on OpenSSL
 .IP \(bu 2
 Run any custom command with options
 .IP \(bu 2
-Basic authentication support and many other custom options
+Password login page, with the password read from a config file
 .IP \(bu 2
 Cross platform: macOS, Linux, FreeBSD/OpenBSD, OpenWrt/LEDE, Windows
 
@@ -50,8 +50,11 @@ Cross platform: macOS, Linux, FreeBSD/OpenBSD, OpenWrt/LEDE, Windows
       User owner of the UNIX domain socket file, when enabled (eg: user:group)
 
 .PP
--c, --credential USER[:PASSWORD]
-      Credential for Basic Authentication (format: username:password)
+-c, --config PATH
+      Path to the config file holding the login password (default: ~/.config/wettyd/config.yaml).
+      The file is YAML-ish, one \fBkey: value\fR per line, and understands
+      \fBauth\fR (\fBpassword\fR or \fBnone\fR) and \fBpassword\fR. It is created with a
+      generated password on first run if it does not exist.
 
 .PP
 -H, --auth-header 

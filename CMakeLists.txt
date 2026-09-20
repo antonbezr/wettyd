@@ -33,7 +33,7 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c src/homedir.c)
+set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c src/sha256.c src/config.c src/homedir.c)
 
 include(FindPackageHandleStandardArgs)
 
@@ -125,17 +125,20 @@ enable_testing()
 set(WETTYD_UNIT_TEST_TARGETS "")
 
 # Registers a pure-C unit test for src/<name>.c, no libwebsockets or network
-# needed: compiles tests/test_<name>.c together with src/<name>.c into its
-# own binary and adds it to ctest. Add a new one with a single line, e.g.
-# add_c_unit_test(homedir) for tests/test_homedir.c + src/homedir.c.
+# needed: compiles tests/test_<name>.c together with src/<name>.c, plus any
+# extra sources passed after the name, into its own binary and adds it to
+# ctest. Add a new one with a single line, e.g. add_c_unit_test(homedir) for
+# tests/test_homedir.c + src/homedir.c.
 function(add_c_unit_test name)
-    add_executable(${name}_test tests/test_${name}.c src/${name}.c)
+    add_executable(${name}_test tests/test_${name}.c src/${name}.c ${ARGN})
     target_include_directories(${name}_test PRIVATE src)
     add_test(NAME ${name}_unit_tests COMMAND ${name}_test)
     set(WETTYD_UNIT_TEST_TARGETS ${WETTYD_UNIT_TEST_TARGETS} ${name}_test PARENT_SCOPE)
 endfunction()
 
-add_c_unit_test(auth)
+add_c_unit_test(auth src/sha256.c)
+add_c_unit_test(sha256)
+add_c_unit_test(config)
 add_c_unit_test(homedir)
 
 # Protocol-level integration test, drives the real WS wire protocol against

@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <uv.h>
 
+#include "config.h"
 #include "pty.h"
 
 // client message
@@ -21,6 +22,8 @@ struct endpoints {
   char *ws;
   char *index;
   char *token;
+  char *login;
+  char *logout;
   char *parent;
 };
 
@@ -34,12 +37,18 @@ struct pss_http {
   char *buffer;
   char *ptr;
   size_t len;
+  bool authenticated;
+  bool login_post;
+  bool body_overflow;
+  char *body;
+  size_t body_len;
 };
 
 struct pss_tty {
   bool initialized;
   int initial_cmd_index;
   bool authenticated;
+  bool cookie_auth;
   char user[30];
   char address[50];
   char path[128];
@@ -64,7 +73,9 @@ typedef struct {
 struct server {
   int client_count;        // client count
   char *prefs_json;        // client preferences
-  char *credential;        // encoded basic auth credential
+  char *password;
+  char *session_token;
+  char *config_path;
   char *auth_header;       // header name used for auth proxy
   char *index;             // custom index.html
   char *command;           // full command line

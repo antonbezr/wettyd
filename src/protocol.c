@@ -194,13 +194,17 @@ static bool check_auth(struct lws *wsi, struct pss_tty *pss) {
     return lws_hdr_custom_copy(wsi, pss->user, sizeof(pss->user), server->auth_header, strlen(server->auth_header)) > 0;
   }
 
-  if (server->credential != NULL) {
-    char buf[256];
-    size_t n = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    return n >= 7 && strstr(buf, "Basic ") && !strcmp(buf + 6, server->credential);
-  }
-
   return true;
+}
+
+static bool check_session_cookie(struct lws *wsi) {
+  if (server->session_token == NULL) return false;
+
+  char cookie[1024];
+  int n = lws_hdr_copy(wsi, cookie, sizeof(cookie), WSI_TOKEN_HTTP_COOKIE);
+  if (n <= 0) return false;
+
+  return auth_cookie_matches(cookie, server->session_token);
 }
 
 int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
@@ -227,15 +231,18 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         return 1;
       }
 
-      // Some WebSocket client implementations, Safari included, cannot attach a
-      // Basic Auth header to the upgrade request itself, see
-      // https://github.com/tsl0922/ttyd/issues/1437. When credential auth is
-      // configured, defer enforcement to the AuthToken sent in the client's
-      // first WS message instead, see auth_should_defer_initial_messages below
-      // and auth_token_matches further down.
-      if (auth_ws_upgrade_requires_basic_auth(server->credential, server->auth_header)) {
+      // Some WebSocket client implementations, Safari included, cannot attach
+      // credentials to the upgrade request itself, see
+      // https://github.com/tsl0922/ttyd/issues/1437. When password auth is
+      // configured, defer enforcement to the session cookie the browser sends
+      // with the upgrade, or to the AuthToken sent in the client's first WS
+      // message, see auth_should_defer_initial_messages below and
+      // auth_token_matches further down.
+      if (auth_ws_upgrade_requires_header(server->session_token, server->auth_header)) {
         if (!check_auth(wsi, pss)) return 1;
       }
+
+      pss->cookie_auth = check_session_cookie(wsi);
 
       if (server->check_origin && !check_host_origin(wsi)) {
         lwsl_warn(
@@ -247,7 +254,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
 
     case LWS_CALLBACK_ESTABLISHED:
       pss->initialized = false;
-      pss->authenticated = false;
+      pss->authenticated = pss->cookie_auth;
       pss->wsi = wsi;
       pss->lws_close_status = LWS_CLOSE_STATUS_NOSTATUS;
 
@@ -274,7 +281,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         // doesn't leak the hostname and running command. spawn_process() calls
         // lws_callback_on_writable() once the client authenticates, so this
         // just defers sending them, it doesn't drop them.
-        if (auth_should_defer_initial_messages(server->credential, server->auth_header, pss->authenticated)) {
+        if (auth_should_defer_initial_messages(server->session_token, server->auth_header, pss->authenticated)) {
           break;
         }
         if (pss->initial_cmd_index == sizeof(initial_cmds)) {
@@ -319,7 +326,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       const char command = pss->buffer[0];
 
       // check auth
-      if (server->credential != NULL && !pss->authenticated && command != JSON_DATA) {
+      if (server->session_token != NULL && !pss->authenticated && command != JSON_DATA) {
         lwsl_warn("WS client not authenticated\n");
         return 1;
       }
@@ -355,14 +362,14 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
           uint16_t columns = 0;
           uint16_t rows = 0;
           json_object *obj = parse_window_size(pss->buffer, pss->len, &columns, &rows);
-          if (server->credential != NULL) {
+          if (server->session_token != NULL && !pss->authenticated) {
             struct json_object *o = NULL;
             if (json_object_object_get_ex(obj, "AuthToken", &o)) {
               const char *token = json_object_get_string(o);
-              if (auth_token_matches(token, server->credential))
+              if (auth_token_matches(token, server->session_token))
                 pss->authenticated = true;
               else
-                lwsl_warn("WS authentication failed with token: %s\n", token);
+                lwsl_warn("WS authentication failed with an invalid token\n");
             }
             if (!pss->authenticated) {
               json_object_put(obj);

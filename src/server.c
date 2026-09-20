@@ -11,6 +11,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "auth.h"
+#include "config.h"
 #include "utils.h"
 #include "compat.h"
 
@@ -21,7 +23,7 @@
 volatile bool force_exit = false;
 struct lws_context *context;
 struct server *server;
-struct endpoints endpoints = {"/ws", "/", "/token", ""};
+struct endpoints endpoints = {"/ws", "/", "/token", "/login", "/logout", ""};
 
 extern int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
 extern int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
@@ -55,7 +57,7 @@ static lws_retry_bo_t retry = {
 static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"interface", required_argument, NULL, 'i'},
                                         {"socket-owner", required_argument, NULL, 'U'},
-                                        {"credential", required_argument, NULL, 'c'},
+                                        {"config", required_argument, NULL, 'c'},
                                         {"auth-header", required_argument, NULL, 'H'},
                                         {"uid", required_argument, NULL, 'u'},
                                         {"gid", required_argument, NULL, 'g'},
@@ -98,7 +100,7 @@ static void print_help() {
           "    -p, --port              Port to listen (default: 7681, use `0` for random port)\n"
           "    -i, --interface         Network interface to bind (eg: eth0), or UNIX domain socket path (eg: /var/run/ttyd.sock)\n"
           "    -U, --socket-owner      User owner of the UNIX domain socket file, when enabled (eg: user:group)\n"
-          "    -c, --credential        Credential for basic authentication (format: username:password)\n"
+          "    -c, --config            Path to the config file holding the login password (default: ~/.config/wettyd/config.yaml)\n"
           "    -H, --auth-header       HTTP Header name for auth proxy, this will configure ttyd to let a HTTP reverse proxy handle authentication\n"
           "    -u, --uid               User id to run with\n"
           "    -g, --gid               Group id to run with\n"
@@ -139,7 +141,11 @@ static void print_help() {
 
 static void print_config() {
   lwsl_notice("tty configuration:\n");
-  if (server->credential != NULL) lwsl_notice("  credential: %s\n", server->credential);
+  if (server->config_path != NULL) lwsl_notice("  config file: %s\n", server->config_path);
+  if (server->session_token != NULL)
+    lwsl_notice("  auth: password\n");
+  else if (server->auth_header == NULL)
+    lwsl_warn("  auth: none, anyone who can reach this port gets a shell\n");
   lwsl_notice("  start command: %s\n", server->command);
   lwsl_notice("  close signal: %s (%d)\n", server->sig_name, server->sig_code);
   lwsl_notice("  terminal type: %s\n", server->terminal_type);
@@ -148,6 +154,8 @@ static void print_config() {
     lwsl_notice("  base-path: %s\n", endpoints.parent);
     lwsl_notice("  index    : %s\n", endpoints.index);
     lwsl_notice("  token    : %s\n", endpoints.token);
+    lwsl_notice("  login    : %s\n", endpoints.login);
+    lwsl_notice("  logout   : %s\n", endpoints.logout);
     lwsl_notice("  websocket: %s\n", endpoints.ws);
   }
   if (server->auth_header != NULL) lwsl_notice("  auth header: %s\n", server->auth_header);
@@ -206,7 +214,9 @@ static struct server *server_new(int argc, char **argv, int start) {
 
 static void server_free(struct server *ts) {
   if (ts == NULL) return;
-  if (ts->credential != NULL) free(ts->credential);
+  if (ts->password != NULL) free(ts->password);
+  if (ts->session_token != NULL) free(ts->session_token);
+  if (ts->config_path != NULL) free(ts->config_path);
   if (ts->auth_header != NULL) free(ts->auth_header);
   if (ts->index != NULL) free(ts->index);
   if (ts->cwd != NULL) free(ts->cwd);
@@ -262,6 +272,47 @@ static int parse_int(char *name, char *str) {
     exit(EXIT_FAILURE);
   }
   return (int)val;
+}
+
+static bool setup_auth(const char *config_path) {
+  char *path = config_path != NULL ? strdup(config_path) : config_default_path();
+  if (path == NULL) {
+    fprintf(stderr, "wettyd: cannot locate a config file, set HOME or pass --config\n");
+    return false;
+  }
+
+  struct wettyd_config cfg;
+  char error[512] = "";
+
+  switch (config_read(path, &cfg, error, sizeof(error))) {
+    case CONFIG_OK:
+      break;
+    case CONFIG_MISSING:
+      config_init(&cfg);
+      config_generate_password(cfg.password, sizeof(cfg.password));
+      if (!config_write(path, &cfg, error, sizeof(error))) {
+        fprintf(stderr, "wettyd: failed to write config file: %s\n", error);
+        free(path);
+        return false;
+      }
+      fprintf(stderr, "wettyd: wrote a generated password to %s\n", path);
+      break;
+    case CONFIG_ERROR:
+    default:
+      fprintf(stderr, "wettyd: invalid config file: %s\n", error);
+      free(path);
+      return false;
+  }
+
+  server->config_path = path;
+
+  if (cfg.auth == CONFIG_AUTH_NONE) return true;
+
+  server->password = strdup(cfg.password);
+  server->session_token = xmalloc(AUTH_TOKEN_LEN);
+  auth_session_token(server->password, server->session_token);
+
+  return true;
 }
 
 static int calc_command_start(int argc, char **argv) {
@@ -335,6 +386,7 @@ int main(int argc, char **argv) {
   char socket_owner[128] = "";
   bool browser = false;
   bool ssl = false;
+  char *config_path = NULL;
   char cert_path[1024] = "";
   char key_path[1024] = "";
   char ca_path[1024] = "";
@@ -395,13 +447,7 @@ int main(int argc, char **argv) {
         socket_owner[sizeof(socket_owner) - 1] = '\0';
         break;
       case 'c':
-        if (strchr(optarg, ':') == NULL) {
-          fprintf(stderr, "wettyd: invalid credential, format: username:password\n");
-          return -1;
-        }
-        char b64_text[256];
-        lws_b64_encode_string(optarg, strlen(optarg), b64_text, sizeof(b64_text));
-        server->credential = strdup(b64_text);
+        config_path = strdup(optarg);
         break;
       case 'H':
         server->auth_header = strdup(optarg);
@@ -453,7 +499,7 @@ int main(int argc, char **argv) {
 #define sc(f)                                  \
   strncpy(path + len, endpoints.f, 128 - len); \
   endpoints.f = strdup(path);
-        sc(ws) sc(index) sc(token) sc(parent)
+        sc(ws) sc(index) sc(token) sc(login) sc(logout) sc(parent)
 #undef sc
       } break;
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
@@ -526,6 +572,9 @@ int main(int argc, char **argv) {
   }
   server->prefs_json = strdup(json_object_to_json_string(client_prefs));
   json_object_put(client_prefs);
+
+  if (server->auth_header == NULL && !setup_auth(config_path)) return -1;
+  if (config_path != NULL) free(config_path);
 
   if (server->command == NULL || strlen(server->command) == 0) {
     fprintf(stderr, "wettyd: missing start command\n");

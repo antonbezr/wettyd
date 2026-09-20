@@ -3,4 +3,6 @@
 /frontend/build/
 /frontend/.test-build/
 /src/html.h
+/src/login_html.h
 *.log
+__pycache__/

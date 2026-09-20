@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <meta name="theme-color" content="#000000" />
+    <link rel="icon" type="image/png" href="__FAVICON_DATA_URI__" />
+    <title>wettyd</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background-color: #000;
+        color: #fff;
+        font-family:
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          'Helvetica Neue',
+          Arial,
+          sans-serif;
+      }
+
+      main {
+        box-sizing: border-box;
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 16px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 22rem;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 1rem;
+      }
+
+      .brand {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .brand img {
+        width: 56px;
+        height: 56px;
+        image-rendering: auto;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 1.35rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      .brand p {
+        margin: 0;
+        font-size: 0.9rem;
+        color: #ccc;
+        text-align: center;
+      }
+
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+
+      label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #ccc;
+      }
+
+      input[type='password'] {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 0.7rem 0.8rem;
+        font-size: 1rem;
+        font-family: inherit;
+        color: #fff;
+        background-color: #111;
+        border: 1px solid #333;
+        border-radius: 4px;
+        outline: none;
+      }
+
+      input[type='password']:focus {
+        border-color: #888;
+      }
+
+      button {
+        padding: 0.7rem 0.8rem;
+        font-size: 1rem;
+        font-family: inherit;
+        font-weight: 600;
+        color: #000;
+        background-color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background-color: #ddd;
+      }
+
+      .error {
+        display: none;
+        padding: 0.6rem 0.8rem;
+        font-size: 0.9rem;
+        color: #fff;
+        background-color: #4a1111;
+        border: 1px solid #833;
+        border-radius: 4px;
+      }
+
+      .error.visible {
+        display: block;
+      }
+
+      footer {
+        margin-top: 1.5rem;
+        font-size: 0.75rem;
+        color: #666;
+        text-align: center;
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #999;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <div class="brand">
+          <img src="__FAVICON_DATA_URI__" alt="" />
+          <h1>wettyd</h1>
+          <p>Enter the password to open a terminal.</p>
+        </div>
+        <div id="error" class="error">Incorrect password. Try again.</div>
+        <form method="POST" action="">
+          <label for="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            autofocus
+            required
+          />
+          <button type="submit">Log in</button>
+        </form>
+      </div>
+      <footer>
+        Password lives in <code>~/.config/wettyd/config.yaml</code>
+      </footer>
+    </main>
+    <script>
+      if (window.location.search.indexOf('error') !== -1) {
+        document.getElementById('error').classList.add('visible');
+        document.getElementById('password').focus();
+      }
+    </script>
+  </body>
+</html>

@@ -2,22 +2,23 @@
 #define WETTYD_AUTH_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
-// True if a WebSocket upgrade request should still be required to carry a
-// valid HTTP Basic Auth header. False when credential auth is configured
-// and enforcement is instead deferred to the AuthToken carried in the
-// client's first WebSocket message, since some WebSocket client
-// implementations cannot attach arbitrary headers to the upgrade request.
-bool auth_ws_upgrade_requires_basic_auth(const char *credential, const char *auth_header);
+#include "sha256.h"
 
-// True if the server's initial post-connect messages (window title,
-// preferences) should be withheld until the client has authenticated.
-// Only relevant when the WebSocket upgrade itself is allowed to proceed
-// without Basic Auth, see auth_ws_upgrade_requires_basic_auth above.
-bool auth_should_defer_initial_messages(const char *credential, const char *auth_header, bool authenticated);
+#define AUTH_COOKIE_NAME "wettyd-session"
+#define AUTH_TOKEN_LEN WETTYD_SHA256_HEX_LEN
 
-// True if a client-supplied token matches the configured credential.
-// Safe to call with either argument NULL.
-bool auth_token_matches(const char *token, const char *credential);
+bool auth_ws_upgrade_requires_header(const char *session_token, const char *auth_header);
+
+bool auth_should_defer_initial_messages(const char *session_token, const char *auth_header, bool authenticated);
+
+bool auth_token_matches(const char *token, const char *session_token);
+
+void auth_session_token(const char *password, char out[AUTH_TOKEN_LEN]);
+
+bool auth_cookie_matches(const char *cookie_header, const char *session_token);
+
+bool auth_form_password(const char *body, size_t len, char *out, size_t out_size);
 
 #endif

@@ -63,7 +63,7 @@ async function buildClient() {
 // Reproduces ttyd/html/gulpfile.js's genHeader(): a C byte array plus the
 // original (index_html_size) and gzip-compressed (index_html_len) lengths,
 // consumed by ttyd's src/http.c via zlib inflate.
-function genHeader(size, buf) {
+function genHeader(name, size, buf) {
   const len = buf.length;
   const lines = [];
   let line = '  ';
@@ -79,9 +79,9 @@ function genHeader(size, buf) {
   }
   lines.push(line);
   return (
-    `unsigned char index_html[] = {\n${lines.join('')}};\n` +
-    `unsigned int index_html_len = ${len};\n` +
-    `unsigned int index_html_size = ${size};\n`
+    `unsigned char ${name}[] = {\n${lines.join('')}};\n` +
+    `unsigned int ${name}_len = ${len};\n` +
+    `unsigned int ${name}_size = ${size};\n`
   );
 }
 
@@ -103,11 +103,27 @@ async function main() {
 
   const originalSize = Buffer.byteLength(inlined);
   const gzipped = gzipSync(Buffer.from(inlined));
-  const header = genHeader(originalSize, gzipped);
+  const header = genHeader('index_html', originalSize, gzipped);
   writeFileSync(`${root}/../src/html.h`, header);
 
   console.log(
     `[wettyd] frontend built: ${originalSize} bytes -> ${gzipped.length} bytes gzipped -> ../src/html.h`,
+  );
+
+  const login = readFileSync(`${root}/src/login.html`, 'utf8').replaceAll(
+    '__FAVICON_DATA_URI__',
+    faviconDataUri(),
+  );
+  writeFileSync(`${root}/build/login.html`, login);
+  const loginSize = Buffer.byteLength(login);
+  const loginGzipped = gzipSync(Buffer.from(login));
+  writeFileSync(
+    `${root}/../src/login_html.h`,
+    genHeader('login_html', loginSize, loginGzipped),
+  );
+
+  console.log(
+    `[wettyd] login page built: ${loginSize} bytes -> ${loginGzipped.length} bytes gzipped -> ../src/login_html.h`,
   );
 }
 
