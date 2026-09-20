@@ -1,13 +1,13 @@
 name: build
 
 # Builds the whole project end to end on every push and pull request: the
-# frontend job regenerates src/html.h from scratch (see frontend/build.js),
-# then the backend job builds the C binary against that freshly generated
-# file rather than the one already committed, so a broken frontend build
-# can't hide behind a stale, still-working html.h. Modeled on ttyd's own
-# split frontend/backend workflows and wetty's Node build-and-test job,
-# simplified down to what's needed to catch a broken build, no release,
-# no publishing, no cross-compile matrix.
+# frontend job regenerates src/html.h and src/login_html.h from scratch (see
+# frontend/build.js), then the backend job builds the C binary against those
+# freshly generated files rather than any already committed, so a broken
+# frontend build can't hide behind stale, still-working headers. Modeled on
+# ttyd's own split frontend/backend workflows and wetty's Node
+# build-and-test job, simplified down to what's needed to catch a broken
+# build, no release, no publishing, no cross-compile matrix.
 
 on:
   push:
@@ -37,14 +37,16 @@ jobs:
         run: npm test
         working-directory: frontend
 
-      - name: Build frontend, generate src/html.h
+      - name: Build frontend, generate src/html.h and src/login_html.h
         run: npm run build
         working-directory: frontend
 
       - uses: actions/upload-artifact@v5
         with:
-          name: html.h
-          path: src/html.h
+          name: generated-headers
+          path: |
+            src/html.h
+            src/login_html.h
 
   backend:
     needs: frontend
@@ -54,7 +56,7 @@ jobs:
 
       - uses: actions/download-artifact@v6
         with:
-          name: html.h
+          name: generated-headers
           path: src
 
       - name: Install dependencies
