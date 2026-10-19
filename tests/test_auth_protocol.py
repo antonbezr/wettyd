@@ -612,6 +612,10 @@ def main():
                 except (Failure, AssertionError) as e:
                     print(f"FAIL {name}: {e}")
                     print(f"---- server log tail ----\n{server.log_tail()}-------------------------")
+                    tail = server.log_tail(150)
+                    for i in range(0, len(tail), 30000):
+                        chunk = tail[i:i+30000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                        print(f"::error title={name} part {i // 30000}::{chunk}")
                     failures.append(name)
                 except Exception as e:  # noqa: BLE001 - report, don't hide, unexpected errors too
                     print(f"ERROR {name}: {e!r}")
