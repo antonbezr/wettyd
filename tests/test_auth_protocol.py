@@ -74,7 +74,7 @@ class Server:
         self.proc = subprocess.Popen(
             [
                 binary,
-                "--writable", "-d", "31",
+                "--writable", "-d", "15",
                 "--port", str(self.port),
                 "--interface", HOST,
                 "--config", self.config_path,
@@ -612,10 +612,10 @@ def main():
                 except (Failure, AssertionError) as e:
                     print(f"FAIL {name}: {e}")
                     print(f"---- server log tail ----\n{server.log_tail()}-------------------------")
-                    tail = server.log_tail(150)
-                    for i in range(0, len(tail), 30000):
-                        chunk = tail[i:i+30000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-                        print(f"::error title={name} part {i // 30000}::{chunk}")
+                    tail = "".join(l + "\n" for l in server.log_tail(400).splitlines() if "TAKEOVER" in l or ("lc_" not in l and "ssl_capable_write" not in l and "header_table" not in l and "_lws_create_ah" not in l))[-3500:]
+                    for i in range(0, len(tail), 3500):
+                        chunk = tail[i:i+3500].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                        print(f"::error title={name} part {i // 3500}::{chunk}")
                     failures.append(name)
                 except Exception as e:  # noqa: BLE001 - report, don't hide, unexpected errors too
                     print(f"ERROR {name}: {e!r}")

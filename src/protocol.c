@@ -128,6 +128,7 @@ static void session_attach(session_t *s, struct pss_tty *pss, uint64_t offset) {
     // Most likely the same browser tab coming back before its old, dead
     // connection has timed out, so hand the session over rather than refuse.
     struct pss_tty *old = s->pss;
+    lwsl_notice("TAKEOVER attach: old wsi %p new wsi %p\n", (void *)old->wsi, (void *)pss->wsi);
     old->session = NULL;
     old->lws_close_status = CLOSE_SESSION_TAKEN_OVER;
     lws_callback_on_writable(old->wsi);
@@ -414,6 +415,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         break;
       }
 
+      lwsl_notice("TAKEOVER writable wsi %p session %p close %d\n", (void *)wsi, (void *)pss->session, pss->lws_close_status);
       if (pss->lws_close_status > LWS_CLOSE_STATUS_NOSTATUS) {
         lws_close_reason(wsi, (enum lws_close_status)pss->lws_close_status, NULL, 0);
         return 1;
@@ -515,6 +517,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       break;
 
     case LWS_CALLBACK_CLOSED:
+      lwsl_notice("TAKEOVER closed wsi %p\n", (void *)wsi);
       if (pss->wsi == NULL) break;
 
       server->client_count--;
