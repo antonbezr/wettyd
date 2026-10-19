@@ -67,17 +67,21 @@ class Server:
             with open(self.config_path, "w") as f:
                 f.write(config)
         self.port = free_port()
+        # A file rather than a pipe nobody reads, which would eventually fill
+        # up and stall the server mid-test.
+        self.log_path = os.path.join(self.dir, "wettyd.log")
+        self.log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(
             [
                 binary,
-                "--writable",
+                "--writable", "-d", "31",
                 "--port", str(self.port),
                 "--interface", HOST,
                 "--config", self.config_path,
                 "cat",
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self.log,
+            stderr=subprocess.STDOUT,
         )
         self._wait_until_listening()
 
@@ -93,6 +97,10 @@ class Server:
                 time.sleep(0.05)
         raise Failure(f"server never started listening on port {self.port}")
 
+    def log_tail(self, lines=40) -> str:
+        with open(self.log_path, "rb") as f:
+            return b"".join(f.readlines()[-lines:]).decode("utf-8", "replace")
+
     def stop(self):
         self.proc.terminate()
         try:
@@ -100,6 +108,7 @@ class Server:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
+        self.log.close()
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
@@ -602,6 +611,7 @@ def main():
                     print(f"PASS {name}")
                 except (Failure, AssertionError) as e:
                     print(f"FAIL {name}: {e}")
+                    print(f"---- server log tail ----\n{server.log_tail()}-------------------------")
                     failures.append(name)
                 except Exception as e:  # noqa: BLE001 - report, don't hide, unexpected errors too
                     print(f"ERROR {name}: {e!r}")
