@@ -40,6 +40,10 @@ together:
   attach credentials to the upgrade request, so Safari never connects at
   all. wettyd defers the check to the session cookie or the first WS
   message, without loosening what an unauthenticated client can see.
+- **Sessions survive disconnects** - a dropped connection or a page reload
+  no longer kills the shell. The browser reconnects on its own and picks
+  the same shell back up, replaying any output it missed. See
+  [Session persistence](#session-persistence).
 - **UTF-8 across message boundaries** - PTY output is decoded as one
   continuous stream, so a multi-byte character split across two WebSocket
   messages no longer turns into replacement glyphs.
@@ -119,6 +123,28 @@ default**, pass `-W`/`--writable` or nothing you type will reach the shell:
 ```
 
 Then open `http://localhost:7681/`.
+
+## Session persistence
+
+ttyd kills the command the moment its WebSocket closes, so a laptop going
+to sleep, a network switch, a backgrounded mobile tab, or a reload all end
+the shell, leaving only a "reconnect" button that starts a new one. wettyd
+keeps the command running instead, and keeps its last 256KB of output.
+
+The server hands each connection a session id, which the page keeps in
+`sessionStorage`, so it lasts across reloads and stays separate per tab.
+When the connection drops, the page reconnects with backoff, sooner if the
+network comes back or the tab returns to the foreground. It sends the id
+back along with how much output it already has, and gets exactly the rest.
+A reloaded page gets the recent output replayed from the start. A
+duplicated tab starts its own shell rather than taking over the original's,
+using a Web Lock held by the original (HTTPS or localhost only).
+
+A disconnected session is kept for `--session-timeout` seconds (default
+86400, one day) before the command is sent `--signal`. `0` restores ttyd's
+kill-on-disconnect behaviour, as do `--once` and `--exit-no-conn`. The
+"Session ended" overlay now only appears when the command itself exits,
+auth is refused, or another tab resumes the same session.
 
 ## Authentication
 

@@ -41,6 +41,7 @@ PASSWORD = "testpassword123"
 WRONG_TOKEN = "not-the-right-token"
 
 CLOSE_POLICY_VIOLATION = 1008
+CLOSE_SESSION_TAKEN_OVER = 4000
 
 
 class Failure(Exception):
@@ -206,6 +207,41 @@ class WsConn:
             return None
         return struct.unpack("!H", frame[2:4])[0]
 
+    def frames(self, timeout=1.0, until=None):
+        """Reads and parses whole frames until `until(frames)` holds, a close
+        frame arrives, or nothing more arrives for `timeout` seconds. Returns
+        (opcode, payload) pairs."""
+        frames = []
+        buf = b""
+        self.sock.settimeout(timeout)
+        while True:
+            while len(buf) >= 2:
+                length = buf[1] & 0x7F
+                header = 2
+                if length == 126:
+                    if len(buf) < 4:
+                        break
+                    length = struct.unpack("!H", buf[2:4])[0]
+                    header = 4
+                elif length == 127:
+                    if len(buf) < 10:
+                        break
+                    length = struct.unpack("!Q", buf[2:10])[0]
+                    header = 10
+                if len(buf) < header + length:
+                    break
+                frames.append((buf[0] & 0x0F, buf[header:header + length]))
+                buf = buf[header + length:]
+            if frames and (frames[-1][0] == 0x8 or (until is not None and until(frames))):
+                return frames
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                return frames
+            if not chunk:
+                return frames
+            buf += chunk
+
     def close(self):
         self.sock.close()
 
@@ -361,6 +397,114 @@ def test_websocket_without_cookie_or_token_is_rejected(server):
     conn.close()
 
 
+def output_of(frames) -> bytes:
+    return b"".join(p[1:] for op, p in frames if op == 0x2 and p[:1] == b"0")
+
+
+def session_of(frames) -> dict:
+    for op, p in frames:
+        if op == 0x2 and p[:1] == b"3":
+            return json.loads(p[1:])
+    raise Failure(f"no session message among {frames!r}")
+
+
+def open_session(port, cookie, **fields):
+    conn = WsConn(port, cookie=cookie)
+    conn.send(json.dumps({"columns": 80, "rows": 24, **fields}).encode())
+    return conn
+
+
+def type_and_wait(conn, text: bytes):
+    """Sends input to `cat` and returns every frame up to its echo."""
+    conn.send(b"0" + text + b"\n")
+    return conn.frames(timeout=2.0, until=lambda fs: output_of(fs).count(text) >= 2)
+
+
+def test_new_connection_is_told_its_session(server):
+    cookie = session_for(server.port)
+    conn = open_session(server.port, cookie)
+    session = session_of(conn.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs)))
+    conn.close()
+    assert re.fullmatch(r"[0-9a-f]{32}", session["id"]), f"expected a random hex session id, got {session!r}"
+    assert session["offset"] == 0, f"a new session's output starts at offset 0, got {session!r}"
+
+
+def test_reconnect_resumes_the_same_process(server):
+    """A dropped connection leaves the command running, and reconnecting
+    with its session id picks it back up, replaying what was missed."""
+    cookie = session_for(server.port)
+    conn = open_session(server.port, cookie)
+    frames = type_and_wait(conn, b"before-drop")
+    session = session_of(frames)
+    seen = len(output_of(frames))
+    conn.close()
+    time.sleep(0.2)
+
+    conn = open_session(server.port, cookie, SessionId=session["id"], Offset=0)
+    frames = conn.frames(until=lambda fs: b"before-drop" in output_of(fs))
+    resumed = session_of(frames)
+    assert resumed["id"] == session["id"], f"expected to resume {session['id']}, got {resumed!r}"
+    assert resumed["offset"] == 0, f"a client with no output should be replayed from the start, got {resumed!r}"
+    assert b"before-drop" in output_of(frames), f"expected the missed output replayed, got {frames!r}"
+    conn.close()
+    time.sleep(0.2)
+
+    # Resuming from where the client left off replays nothing it already has,
+    # and the command still takes input.
+    conn = open_session(server.port, cookie, SessionId=session["id"], Offset=seen)
+    frames = type_and_wait(conn, b"after-drop")
+    assert session_of(frames)["offset"] == seen, f"expected to resume at offset {seen}, got {frames!r}"
+    output = output_of(frames)
+    assert b"before-drop" not in output, f"output the client already had was sent again: {output!r}"
+    assert b"after-drop" in output, f"the resumed command should still echo input, got {output!r}"
+    conn.close()
+
+
+def test_unknown_session_id_starts_a_new_one(server):
+    cookie = session_for(server.port)
+    conn = open_session(server.port, cookie, SessionId="0" * 32, Offset=1234)
+    session = session_of(conn.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs)))
+    conn.close()
+    assert session["id"] != "0" * 32, "an unknown session id must not be adopted as-is"
+    assert session["offset"] == 0, f"a new session's output starts at offset 0, got {session!r}"
+
+
+def test_resuming_takes_over_from_a_still_open_connection(server):
+    """The old connection of a tab that comes back may not have been noticed
+    as dead yet, the resume wins and the old connection is told why."""
+    cookie = session_for(server.port)
+    old = open_session(server.port, cookie)
+    session = session_of(old.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs)))
+
+    new = open_session(server.port, cookie, SessionId=session["id"])
+    assert session_of(new.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs)))["id"] == session["id"]
+    frames = old.frames(timeout=2.0)
+    assert frames and frames[-1][0] == 0x8, f"the superseded connection should be closed, got {frames!r}"
+    code = struct.unpack("!H", frames[-1][1][:2])[0]
+    assert code == CLOSE_SESSION_TAKEN_OVER, f"expected close({CLOSE_SESSION_TAKEN_OVER}), got {code}"
+    assert b"taken-over" in output_of(type_and_wait(new, b"taken-over")), "the new connection should own the session"
+    old.close()
+    new.close()
+
+
+def test_session_id_does_not_bypass_auth(server):
+    cookie = session_for(server.port)
+    conn = open_session(server.port, cookie)
+    session = session_of(conn.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs)))
+
+    intruder = WsConn(server.port)
+    intruder.send(json.dumps({"AuthToken": WRONG_TOKEN, "SessionId": session["id"], "columns": 80, "rows": 24}).encode())
+    frame = intruder.recv_raw()
+    assert intruder.close_code(frame) == CLOSE_POLICY_VIOLATION and len(frame) == 4, (
+        f"a session id without valid auth must get nothing but a close, got {frame!r}"
+    )
+    intruder.close()
+    assert b"still-mine" in output_of(type_and_wait(conn, b"still-mine")), (
+        "a rejected resume attempt must not disturb the session's own connection"
+    )
+    conn.close()
+
+
 PASSWORD_TESTS = [
     test_index_redirects_to_login,
     test_login_page_is_served,
@@ -379,6 +523,11 @@ PASSWORD_TESTS = [
     test_correct_token_succeeds_and_spawns_process,
     test_session_cookie_authenticates_the_websocket,
     test_websocket_without_cookie_or_token_is_rejected,
+    test_new_connection_is_told_its_session,
+    test_reconnect_resumes_the_same_process,
+    test_unknown_session_id_starts_a_new_one,
+    test_resuming_takes_over_from_a_still_open_connection,
+    test_session_id_does_not_bypass_auth,
 ]
 
 

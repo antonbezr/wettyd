@@ -14,6 +14,7 @@ const enum ServerCmd {
   Output = '0',
   SetWindowTitle = '1',
   SetPreferences = '2',
+  SetSession = '3',
 }
 const enum ClientCmd {
   Input = '0',
@@ -28,7 +29,77 @@ export type SocketEventName =
   | 'login'
   | 'logout'
   | 'disconnect'
+  | 'reconnecting'
+  | 'reset'
   | 'error';
+
+// Close codes after which reconnecting can't help: the command exited (the
+// server closes normally whatever its exit code), auth was refused, or
+// another tab resumed this session (src/server.h's CLOSE_SESSION_TAKEN_OVER).
+// Anything else, 1006 above all, is a dropped connection, and the server
+// keeps the session running for this client to come back to.
+const CLOSE_NORMAL = 1000;
+const CLOSE_POLICY_VIOLATION = 1008;
+const CLOSE_SESSION_TAKEN_OVER = 4000;
+
+export function shouldReconnect(code: number): boolean {
+  return (
+    code !== CLOSE_NORMAL &&
+    code !== CLOSE_POLICY_VIOLATION &&
+    code !== CLOSE_SESSION_TAKEN_OVER
+  );
+}
+
+const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+const RECONNECT_MAX_DELAY_MS = 10000;
+
+export function reconnectDelay(attempt: number): number {
+  return RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_MAX_DELAY_MS;
+}
+
+const SESSION_STORAGE_KEY = 'wettyd-session';
+
+function storedSessionId(): string {
+  try {
+    return sessionStorage.getItem(SESSION_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function storeSessionId(id: string): void {
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+  } catch {
+    // Storage unavailable, a reload just starts a new session.
+  }
+}
+
+/**
+ * Holds a Web Lock named after the session for as long as this page lives,
+ * resolving to whether it got it. A duplicated tab inherits the original's
+ * sessionStorage, session id included, and would otherwise take the session
+ * over from the original; the original holding this lock stops that. A
+ * reload releases the lock as the old page unloads, so waiting briefly for
+ * it lets the reloaded page claim it straight back.
+ */
+function claimSession(id: string): Promise<boolean> {
+  // Only exposed in secure contexts, without it there's no telling a
+  // duplicated tab apart, so resume regardless.
+  if (!('locks' in navigator)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    navigator.locks
+      .request(
+        `wettyd-session-${id}`,
+        { signal: AbortSignal.timeout(500) },
+        () => {
+          resolve(true);
+          return new Promise<never>(() => {});
+        },
+      )
+      .catch(() => resolve(false));
+  });
+}
 
 type Listener = (...args: never[]) => void;
 
@@ -50,7 +121,7 @@ export class TtydSocket implements SocketLike {
 
   // Decodes the continuous PTY output byte stream, see outputDecoder.ts for
   // why this needs to be separate from the metadata decoder above.
-  private readonly outputDecoder = new OutputDecoder();
+  private outputDecoder = new OutputDecoder();
 
   private token = '';
 
@@ -59,6 +130,17 @@ export class TtydSocket implements SocketLike {
   private rows = 24;
 
   private everOpened = false;
+
+  // The server-side session this page is attached to, and how many bytes of
+  // its output have arrived, sent back on reconnect to resume it without
+  // replaying what this page already shows.
+  private sessionId = '';
+
+  private received = 0;
+
+  private reconnectAttempt = 0;
+
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly wsUrl: string,
@@ -77,6 +159,16 @@ export class TtydSocket implements SocketLike {
   }
 
   async connect(): Promise<void> {
+    const id = storedSessionId();
+    if (id && (await claimSession(id))) this.sessionId = id;
+    window.addEventListener('online', this.reconnectNow);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.reconnectNow();
+    });
+    await this.open();
+  }
+
+  private async open(): Promise<void> {
     try {
       const resp = await fetch(this.tokenUrl);
       if (resp.ok) {
@@ -101,8 +193,11 @@ export class TtydSocket implements SocketLike {
       AuthToken: this.token,
       columns: this.cols,
       rows: this.rows,
+      SessionId: this.sessionId,
+      Offset: this.received,
     });
     this.ws?.send(this.encoder.encode(msg));
+    this.reconnectAttempt = 0;
     if (this.everOpened) {
       this.fire('login');
     } else {
@@ -119,7 +214,16 @@ export class TtydSocket implements SocketLike {
 
     switch (cmd) {
       case ServerCmd.Output:
+        this.received += data.length;
         this.fire('data', this.outputDecoder.decode(data));
+        break;
+      case ServerCmd.SetSession:
+        this.onSession(
+          JSON.parse(this.decoder.decode(data)) as {
+            id: string;
+            offset: number;
+          },
+        );
         break;
       case ServerCmd.SetWindowTitle:
         document.title = this.decoder.decode(data);
@@ -133,13 +237,55 @@ export class TtydSocket implements SocketLike {
     }
   };
 
+  // Sent before any output, says where in the session's output stream what
+  // follows starts. Anything other than exactly where this page left off
+  // (a new session, or a replay of one this page has a gap in) means the
+  // terminal has to start over from what's about to arrive.
+  private onSession({ id, offset }: { id: string; offset: number }): void {
+    const replaced = this.sessionId !== '' && id !== this.sessionId;
+    if (replaced || offset !== this.received) {
+      this.outputDecoder = new OutputDecoder();
+      this.fire('reset', replaced);
+    }
+    this.received = offset;
+    if (id !== this.sessionId) {
+      this.sessionId = id;
+      storeSessionId(id);
+      void claimSession(id);
+    }
+  }
+
   private readonly onClose = (event: CloseEvent): void => {
-    this.fire(event.code === 1000 ? 'logout' : 'disconnect', event.reason);
+    if (event.target !== this.ws) return;
+    this.ws = undefined;
+    if (event.code === CLOSE_NORMAL) {
+      this.fire('logout', event.reason);
+    } else if (event.code === CLOSE_SESSION_TAKEN_OVER) {
+      this.fire('disconnect', 'Session resumed in another tab');
+    } else if (!shouldReconnect(event.code) || !this.everOpened) {
+      this.fire('disconnect', event.reason);
+    } else {
+      this.fire('reconnecting');
+      this.reconnectTimer = setTimeout(
+        this.reconnectNow,
+        reconnectDelay(this.reconnectAttempt),
+      );
+      this.reconnectAttempt += 1;
+    }
   };
 
-  private readonly onError = (): void => {
-    this.fire('error', 'WebSocket connection error');
+  // The connection is likely back (the network returned, or the tab came to
+  // the foreground), so skip whatever's left of the backoff.
+  private readonly reconnectNow = (): void => {
+    if (this.reconnectTimer === undefined) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    void this.open();
   };
+
+  // A failed connection is always followed by a close event, which decides
+  // whether to reconnect, see onClose.
+  private readonly onError = (): void => {};
 
   emit(event: string, payload?: unknown): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;

@@ -4,6 +4,7 @@
 
 #include "config.h"
 #include "pty.h"
+#include "replay.h"
 
 // client message
 #define INPUT '0'
@@ -16,6 +17,10 @@
 #define OUTPUT '0'
 #define SET_WINDOW_TITLE '1'
 #define SET_PREFERENCES '2'
+#define SET_SESSION '3'
+
+// close code telling a client its session was resumed by another connection
+#define CLOSE_SESSION_TAKEN_OVER 4000
 
 // url paths
 struct endpoints {
@@ -44,6 +49,20 @@ struct pss_http {
   size_t body_len;
 };
 
+struct pss_tty;
+
+// A spawned command and its recent output, outliving any one WebSocket so a
+// client that drops its connection can resume it, see protocol.c.
+typedef struct session_ {
+  char id[33];
+  pty_process *process;   // NULL once the command has exited
+  struct pss_tty *pss;    // attached client, NULL while detached
+  replay_buf_t replay;
+  bool eof;               // the PTY has nothing more to read
+  uv_timer_t *reap_timer;
+  struct session_ *next;
+} session_t;
+
 struct pss_tty {
   bool initialized;
   int initial_cmd_index;
@@ -59,16 +78,11 @@ struct pss_tty {
   char *buffer;
   size_t len;
 
-  pty_process *process;
-  pty_buf_t *pty_buf;
+  session_t *session;
+  uint64_t sent;  // offset into session->replay the client has been sent up to
 
   int lws_close_status;
 };
-
-typedef struct {
-  struct pss_tty *pss;
-  bool ws_closed;
-} pty_ctx_t;
 
 struct server {
   int client_count;        // client count
@@ -90,6 +104,7 @@ struct server {
   int max_clients;         // maximum clients to support
   bool once;               // whether accept only one client and exit on disconnection
   bool exit_no_conn;       // whether exit on all clients disconnection
+  int session_timeout;     // seconds a disconnected session is kept for resuming, 0 to kill it at once
   char socket_path[255];   // UNIX domain socket path
   char terminal_type[30];  // terminal type to report
 

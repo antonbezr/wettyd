@@ -33,7 +33,7 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c src/sha256.c src/config.c src/homedir.c)
+set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/server.c src/auth.c src/sha256.c src/config.c src/homedir.c src/replay.c)
 
 include(FindPackageHandleStandardArgs)
 
@@ -140,6 +140,7 @@ add_c_unit_test(auth src/sha256.c)
 add_c_unit_test(sha256)
 add_c_unit_test(config)
 add_c_unit_test(homedir)
+add_c_unit_test(replay)
 
 # Protocol-level integration test, drives the real WS wire protocol against
 # a live wettyd process.

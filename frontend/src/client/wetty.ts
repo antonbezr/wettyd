@@ -3,7 +3,7 @@ import { faCogs, faKeyboard } from '@fortawesome/free-solid-svg-icons';
 
 import '../assets/scss/styles.scss';
 
-import { disconnect } from './wetty/disconnect';
+import { disconnect, reconnecting } from './wetty/disconnect';
 import { overlay } from './wetty/disconnect/elements';
 import { verifyPrompt } from './wetty/disconnect/verify';
 import { FileDownloader } from './wetty/download';
@@ -78,8 +78,15 @@ socket.on('connect', () => {
       if (pending > FLOW_HIGH_WATER) socket.emit('pause');
     })
     .on('login', () => {
-      term.writeln('');
+      if (overlay !== null) overlay.style.display = 'none';
       term.resizeTerm();
+    })
+    .on('reconnecting', reconnecting)
+    .on('reset', (replaced: boolean) => {
+      term.reset();
+      if (replaced) {
+        term.writeln('\x1b[2m[previous session ended, started a new one]\x1b[0m');
+      }
     })
     .on('logout', disconnect)
     .on('disconnect', disconnect)
