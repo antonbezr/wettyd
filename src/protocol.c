@@ -55,6 +55,13 @@ static int send_initial_message(struct lws *wsi, struct pss_tty *pss, int index)
   return lws_write(wsi, p, (size_t)n, LWS_WRITE_BINARY);
 }
 
+static int send_session_end(struct lws *wsi, int code) {
+  unsigned char message[LWS_PRE + 16];
+  unsigned char *p = &message[LWS_PRE];
+  int n = snprintf((char *)p, 16, "%c%d", SESSION_END, code);
+  return lws_write(wsi, p, (size_t)n, LWS_WRITE_BINARY);
+}
+
 static json_object *parse_window_size(const char *buf, size_t len, uint16_t *cols, uint16_t *rows) {
   json_tokener *tok = json_tokener_new();
   json_object *obj = json_tokener_parse_ex(tok, buf, len);
@@ -415,6 +422,15 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       }
 
       if (pss->lws_close_status > LWS_CLOSE_STATUS_NOSTATUS) {
+        // Say why in a plain message before closing: closing from inside
+        // this callback, libwebsockets 4.3 on libuv drops the connection
+        // without ever sending the close frame, so its code never arrives.
+        if (!pss->end_sent) {
+          pss->end_sent = true;
+          if (send_session_end(wsi, pss->lws_close_status) < 0) return -1;
+          lws_callback_on_writable(wsi);
+          break;
+        }
         lws_close_reason(wsi, (enum lws_close_status)pss->lws_close_status, NULL, 0);
         return 1;
       }

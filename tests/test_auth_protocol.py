@@ -67,6 +67,10 @@ class Server:
             with open(self.config_path, "w") as f:
                 f.write(config)
         self.port = free_port()
+        # A file rather than a pipe nobody reads, which would eventually fill
+        # up and stall the server mid-test.
+        self.log_path = os.path.join(self.dir, "wettyd.log")
+        self.log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(
             [
                 binary,
@@ -76,8 +80,8 @@ class Server:
                 "--config", self.config_path,
                 "cat",
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self.log,
+            stderr=subprocess.STDOUT,
         )
         self._wait_until_listening()
 
@@ -93,6 +97,10 @@ class Server:
                 time.sleep(0.05)
         raise Failure(f"server never started listening on port {self.port}")
 
+    def log_tail(self, lines=40) -> str:
+        with open(self.log_path, "rb") as f:
+            return b"".join(f.readlines()[-lines:]).decode("utf-8", "replace")
+
     def stop(self):
         self.proc.terminate()
         try:
@@ -100,6 +108,7 @@ class Server:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
+        self.log.close()
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
@@ -420,6 +429,27 @@ def type_and_wait(conn, text: bytes):
     return conn.frames(timeout=2.0, until=lambda fs: output_of(fs).count(text) >= 2)
 
 
+def end_code_of(conn):
+    """The code the server says it's closing the connection with. Read from
+    its explicit end message rather than the close frame, which libwebsockets
+    4.3 on libuv never sends when closing from a writable callback."""
+    frames = conn.frames(timeout=2.0, until=lambda fs: any(op == 0x2 and p[:1] == b"4" for op, p in fs))
+    for op, p in frames:
+        if op == 0x2 and p[:1] == b"4":
+            return int(p[1:])
+    raise Failure(f"no session end message among {frames!r}")
+
+
+def test_command_exit_is_announced_as_a_normal_close(server):
+    """Tells the client not to reconnect, the session is gone for good."""
+    cookie = session_for(server.port)
+    conn = open_session(server.port, cookie)
+    conn.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs))
+    conn.send(b"0\x04")  # Ctrl-D, cat sees EOF and exits
+    assert end_code_of(conn) == 1000, "a command exiting should end the session with a normal close"
+    conn.close()
+
+
 def test_new_connection_is_told_its_session(server):
     cookie = session_for(server.port)
     conn = open_session(server.port, cookie)
@@ -478,10 +508,7 @@ def test_resuming_takes_over_from_a_still_open_connection(server):
 
     new = open_session(server.port, cookie, SessionId=session["id"])
     assert session_of(new.frames(until=lambda fs: any(p[:1] == b"3" for _, p in fs)))["id"] == session["id"]
-    frames = old.frames(timeout=2.0)
-    assert frames and frames[-1][0] == 0x8, f"the superseded connection should be closed, got {frames!r}"
-    code = struct.unpack("!H", frames[-1][1][:2])[0]
-    assert code == CLOSE_SESSION_TAKEN_OVER, f"expected close({CLOSE_SESSION_TAKEN_OVER}), got {code}"
+    assert end_code_of(old) == CLOSE_SESSION_TAKEN_OVER, "the superseded connection should be told it was taken over"
     assert b"taken-over" in output_of(type_and_wait(new, b"taken-over")), "the new connection should own the session"
     old.close()
     new.close()
@@ -527,6 +554,7 @@ PASSWORD_TESTS = [
     test_reconnect_resumes_the_same_process,
     test_unknown_session_id_starts_a_new_one,
     test_resuming_takes_over_from_a_still_open_connection,
+    test_command_exit_is_announced_as_a_normal_close,
     test_session_id_does_not_bypass_auth,
 ]
 
@@ -602,6 +630,7 @@ def main():
                     print(f"PASS {name}")
                 except (Failure, AssertionError) as e:
                     print(f"FAIL {name}: {e}")
+                    print(f"---- server log tail ----\n{server.log_tail()}-------------------------")
                     failures.append(name)
                 except Exception as e:  # noqa: BLE001 - report, don't hide, unexpected errors too
                     print(f"ERROR {name}: {e!r}")

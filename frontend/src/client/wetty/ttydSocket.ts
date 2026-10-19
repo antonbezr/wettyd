@@ -15,6 +15,7 @@ const enum ServerCmd {
   SetWindowTitle = '1',
   SetPreferences = '2',
   SetSession = '3',
+  SessionEnd = '4',
 }
 const enum ClientCmd {
   Input = '0',
@@ -142,6 +143,11 @@ export class TtydSocket implements SocketLike {
 
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
+  // Why the server is about to close the connection, sent ahead of the close
+  // itself since not every libwebsockets version delivers the close frame's
+  // code, see src/protocol.c.
+  private endCode?: number;
+
   constructor(
     private readonly wsUrl: string,
     private readonly tokenUrl: string,
@@ -217,6 +223,9 @@ export class TtydSocket implements SocketLike {
         this.received += data.length;
         this.fire('data', this.outputDecoder.decode(data));
         break;
+      case ServerCmd.SessionEnd:
+        this.endCode = Number(this.decoder.decode(data));
+        break;
       case ServerCmd.SetSession:
         this.onSession(
           JSON.parse(this.decoder.decode(data)) as {
@@ -258,11 +267,13 @@ export class TtydSocket implements SocketLike {
   private readonly onClose = (event: CloseEvent): void => {
     if (event.target !== this.ws) return;
     this.ws = undefined;
-    if (event.code === CLOSE_NORMAL) {
+    const code = this.endCode ?? event.code;
+    this.endCode = undefined;
+    if (code === CLOSE_NORMAL) {
       this.fire('logout', event.reason);
-    } else if (event.code === CLOSE_SESSION_TAKEN_OVER) {
+    } else if (code === CLOSE_SESSION_TAKEN_OVER) {
       this.fire('disconnect', 'Session resumed in another tab');
-    } else if (!shouldReconnect(event.code) || !this.everOpened) {
+    } else if (!shouldReconnect(code) || !this.everOpened) {
       this.fire('disconnect', event.reason);
     } else {
       this.fire('reconnecting');

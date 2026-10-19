@@ -18,6 +18,7 @@
 #define SET_WINDOW_TITLE '1'
 #define SET_PREFERENCES '2'
 #define SET_SESSION '3'
+#define SESSION_END '4'
 
 // close code telling a client its session was resumed by another connection
 #define CLOSE_SESSION_TAKEN_OVER 4000
@@ -82,6 +83,7 @@ struct pss_tty {
   uint64_t sent;  // offset into session->replay the client has been sent up to
 
   int lws_close_status;
+  bool end_sent;  // SESSION_END already sent, close on the next writable
 };
 
 struct server {
